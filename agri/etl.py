@@ -26,7 +26,8 @@ DATABASE_URL = os.getenv(
     'postgresql://agri_63uq_user:hPZNCkCa80anWm9HXlm9M7yd371C1jvY@dpg-d8tn8mojs32c73bv2h40-a.singapore-postgres.render.com/agri_63uq'
 )
 
-START_DATE = datetime(2021, 6, 1)
+START_DATE = datetime(2015, 1, 1)
+END_DATE = datetime(2025, 12, 31)
 
 class AgrimarkETL:
     def __init__(self):
@@ -129,7 +130,7 @@ class AgrimarkETL:
         logging.info(f"Loaded {len(all_branches)} branches.")
         
         start = datetime.strptime(start_date, '%Y-%m-%d') if start_date else START_DATE
-        end = datetime.strptime(end_date, '%Y-%m-%d') if end_date else datetime.now()
+        end = datetime.strptime(end_date, '%Y-%m-%d') if end_date else END_DATE
         delta = end - start
         dates = [(start + timedelta(days=i)).strftime('%d-%m-%Y') for i in range(delta.days + 1)]
         self.stats['dates_processed'] = len(dates)
