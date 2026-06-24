@@ -21,19 +21,16 @@ console = logging.StreamHandler()
 console.setLevel(logging.INFO)
 logging.getLogger('').addHandler(console)
 
-DB_CONFIG = {
-    'host': os.getenv('DB_HOST', 'localhost'),
-    'user': os.getenv('DB_USER', 'postgres'),
-    'password': os.getenv('DB_PASSWORD', 'Nara@#2005'),
-    'dbname': os.getenv('DB_NAME', 'agrimark'),
-    'port': os.getenv('DB_PORT', '5432')
-}
+DATABASE_URL = os.getenv(
+    'DATABASE_URL',
+    'postgresql://agri_63uq_user:hPZNCkCa80anWm9HXlm9M7yd371C1jvY@dpg-d8tn8mojs32c73bv2h40-a.singapore-postgres.render.com/agri_63uq'
+)
 
 START_DATE = datetime(2021, 6, 1)
 
 class AgrimarkETL:
     def __init__(self):
-        self.db = psycopg2.connect(**DB_CONFIG)
+        self.db = psycopg2.connect(DATABASE_URL)
         self.cursor = self.db.cursor()
         
         self.stats = {

@@ -9,12 +9,12 @@ from typing import Optional
 from datetime import datetime
 
 # Import the ETL process
-from etl import AgrimarkETL, DB_CONFIG
+from etl import AgrimarkETL, DATABASE_URL
 
 app = FastAPI(title="Agrimark ETL API")
 
 def get_db_connection():
-    return psycopg2.connect(**DB_CONFIG)
+    return psycopg2.connect(DATABASE_URL)
 
 @app.get("/")
 def read_root():
