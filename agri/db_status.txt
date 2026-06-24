@@ -1,6 +1,0 @@
---- LIVE DATABASE STATUS ---
-Last Updated: 2026-06-24 09:07:33
-Total Refreshes: 0
-
-Total records currently in database: 245,376
-Date range of downloaded records: 2026-05-27 to 2026-06-23

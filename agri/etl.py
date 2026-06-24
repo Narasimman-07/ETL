@@ -2,7 +2,9 @@ import requests
 import json
 import logging
 from datetime import datetime, timedelta
-import mysql.connector
+import psycopg2
+from psycopg2.extras import execute_values
+import os
 from bs4 import BeautifulSoup
 import urllib3
 import time
@@ -20,17 +22,18 @@ console.setLevel(logging.INFO)
 logging.getLogger('').addHandler(console)
 
 DB_CONFIG = {
-    'host': 'localhost',
-    'user': 'root',
-    'password': 'Nara@#2005',
-    'database': 'agridata'
+    'host': os.getenv('DB_HOST', 'localhost'),
+    'user': os.getenv('DB_USER', 'postgres'),
+    'password': os.getenv('DB_PASSWORD', 'Nara@#2005'),
+    'dbname': os.getenv('DB_NAME', 'agrimark'),
+    'port': os.getenv('DB_PORT', '5432')
 }
 
 START_DATE = datetime(2021, 6, 1)
 
 class AgrimarkETL:
     def __init__(self):
-        self.db = mysql.connector.connect(**DB_CONFIG)
+        self.db = psycopg2.connect(**DB_CONFIG)
         self.cursor = self.db.cursor()
         
         self.stats = {
@@ -66,10 +69,11 @@ class AgrimarkETL:
             raise Exception("Failed to fetch districts. Server may be down or blocking requests.")
             
         insert_query = """
-            INSERT IGNORE INTO districts (district_code, district_name)
-            VALUES (%s, %s)
+            INSERT INTO districts (district_code, district_name)
+            VALUES %s
+            ON CONFLICT (district_name) DO NOTHING
         """
-        self.cursor.executemany(insert_query, [(d['code'], d['name']) for d in districts])
+        execute_values(self.cursor, insert_query, [(d['code'], d['name']) for d in districts])
         self.db.commit()
         self.stats['districts_processed'] = len(districts)
         logging.info(f"Loaded {len(districts)} districts.")
@@ -105,7 +109,7 @@ class AgrimarkETL:
                 time.sleep(1)
         return None
 
-    def process(self):
+    def process(self, start_date=None, end_date=None):
         districts = self.get_districts()
         
         all_branches = []
@@ -118,25 +122,28 @@ class AgrimarkETL:
             raise Exception("Failed to fetch any branches.")
             
         branch_query = """
-            INSERT IGNORE INTO branches (branch_id, branch_name, district_code)
-            VALUES (%s, %s, %s)
+            INSERT INTO branches (branch_id, branch_name, district_code)
+            VALUES %s
+            ON CONFLICT (branch_id) DO NOTHING
         """
-        self.cursor.executemany(branch_query, [(b['id'], b['name'], b['district_code']) for b in all_branches])
+        execute_values(self.cursor, branch_query, [(b['id'], b['name'], b['district_code']) for b in all_branches])
         self.db.commit()
         self.stats['branches_processed'] = len(all_branches)
         logging.info(f"Loaded {len(all_branches)} branches.")
         
-        end_date = datetime.now()
-        delta = end_date - START_DATE
-        dates = [(START_DATE + timedelta(days=i)).strftime('%d-%m-%Y') for i in range(delta.days + 1)]
+        start = datetime.strptime(start_date, '%Y-%m-%d') if start_date else START_DATE
+        end = datetime.strptime(end_date, '%Y-%m-%d') if end_date else datetime.now()
+        delta = end - start
+        dates = [(start + timedelta(days=i)).strftime('%d-%m-%Y') for i in range(delta.days + 1)]
         self.stats['dates_processed'] = len(dates)
         
         logging.info(f"Starting historical extraction for {len(dates)} dates...")
         
         insert_query = """
-            INSERT IGNORE INTO market_prices 
+            INSERT INTO market_prices 
             (district_code, branch_id, price_date, item_name, min_price, max_price, qty)
-            VALUES (%s, %s, %s, %s, %s, %s, %s)
+            VALUES %s
+            ON CONFLICT (branch_id, price_date, item_name) DO NOTHING
         """
         
         for date_str in reversed(dates):
@@ -170,7 +177,7 @@ class AgrimarkETL:
                         daily_records.extend(res)
             
             if daily_records:
-                self.cursor.executemany(insert_query, daily_records)
+                execute_values(self.cursor, insert_query, daily_records)
                 self.db.commit()
                 self.stats['records_inserted'] += len(daily_records)
                 logging.info(f"  -> Inserted {len(daily_records)} records for {date_str}")
