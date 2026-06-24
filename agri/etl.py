@@ -29,6 +29,10 @@ DATABASE_URL = os.getenv(
 START_DATE = datetime(2015, 1, 1)
 END_DATE = datetime(2025, 12, 31)
 
+HEADERS = {
+    'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36'
+}
+
 class AgrimarkETL:
     def __init__(self):
         self.db = psycopg2.connect(DATABASE_URL)
@@ -50,7 +54,7 @@ class AgrimarkETL:
         districts = []
         for attempt in range(5):
             try:
-                res = requests.get("https://www.agrimark.tn.gov.in/", verify=False, timeout=10)
+                res = requests.get("https://www.agrimark.tn.gov.in/", headers=HEADERS, verify=False, timeout=30)
                 soup = BeautifulSoup(res.text, 'html.parser')
                 dist_select = soup.find('select', id='distlist')
                 if dist_select:
@@ -64,7 +68,14 @@ class AgrimarkETL:
                 time.sleep(2)
                 
         if not districts:
-            raise Exception("Failed to fetch districts. Server may be down or blocking requests.")
+            logging.warning("Falling back to local database for districts.")
+            self.cursor.execute("SELECT district_code, district_name FROM districts")
+            rows = self.cursor.fetchall()
+            for r in rows:
+                districts.append({'code': r[0], 'name': r[1]})
+                
+        if not districts:
+            raise Exception("Failed to fetch districts and database is empty.")
             
         insert_query = """
             INSERT INTO districts (district_code, district_name)
@@ -81,7 +92,7 @@ class AgrimarkETL:
         branches = []
         for attempt in range(3):
             try:
-                res = requests.post("https://www.agrimark.tn.gov.in/home/getUSList", data={'district': district_code}, verify=False, timeout=10)
+                res = requests.post("https://www.agrimark.tn.gov.in/home/getUSList", data={'district': district_code}, headers=HEADERS, verify=False, timeout=30)
                 data = res.json()
                 for row in data:
                     branches.append({
@@ -92,13 +103,21 @@ class AgrimarkETL:
                 break
             except Exception as e:
                 time.sleep(1)
+                
+        if not branches:
+            logging.warning(f"Falling back to local database for branches of district {district_code}.")
+            self.cursor.execute("SELECT branch_id, branch_name, district_code FROM branches WHERE district_code = %s", (district_code,))
+            rows = self.cursor.fetchall()
+            for r in rows:
+                branches.append({'id': r[0], 'name': r[1], 'district_code': r[2]})
+                
         return branches
 
     def fetch_prices(self, date_str, dist_id, us_id):
         url = f"https://www.agrimark.tn.gov.in/home/getPrice_dir/{date_str}/{dist_id}/{us_id}"
         for attempt in range(3):
             try:
-                res = requests.post(url, timeout=10, verify=False)
+                res = requests.post(url, headers=HEADERS, timeout=30, verify=False)
                 data = res.json()
                 if 'price_list' in data and data['price_list']:
                     return data['price_list']
@@ -167,7 +186,7 @@ class AgrimarkETL:
                     return records
                 return []
 
-            with ThreadPoolExecutor(max_workers=5) as executor:
+            with ThreadPoolExecutor(max_workers=2) as executor:
                 futures = [executor.submit(worker, b) for b in all_branches]
                 for future in as_completed(futures):
                     res = future.result()
