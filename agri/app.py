@@ -8,10 +8,32 @@ import csv
 from typing import Optional
 from datetime import datetime
 
+from contextlib import asynccontextmanager
+
 # Import the ETL process
 from etl import AgrimarkETL, DATABASE_URL
 
-app = FastAPI(title="Agrimark ETL API")
+def init_db():
+    try:
+        conn = psycopg2.connect(DATABASE_URL)
+        cur = conn.cursor()
+        with open("schema.sql", "r") as f:
+            cur.execute(f.read())
+        conn.commit()
+        cur.close()
+        conn.close()
+        print("Database tables initialized successfully.")
+    except Exception as e:
+        print(f"Error initializing database: {e}")
+
+@asynccontextmanager
+async def lifespan(app: FastAPI):
+    # Run on startup
+    init_db()
+    yield
+    # Run on shutdown (nothing needed here)
+
+app = FastAPI(title="Agrimark ETL API", lifespan=lifespan)
 
 def get_db_connection():
     return psycopg2.connect(DATABASE_URL)
