@@ -10,6 +10,9 @@ import urllib3
 import time
 urllib3.disable_warnings()
 from concurrent.futures import ThreadPoolExecutor, as_completed
+from dotenv import load_dotenv
+
+load_dotenv()
 
 # Setup Logging
 logging.basicConfig(
@@ -21,10 +24,19 @@ console = logging.StreamHandler()
 console.setLevel(logging.INFO)
 logging.getLogger('').addHandler(console)
 
-DATABASE_URL = os.getenv(
-    'DATABASE_URL',
-    'postgresql://agri_63uq_user:hPZNCkCa80anWm9HXlm9M7yd371C1jvY@dpg-d8tn8mojs32c73bv2h40-a.singapore-postgres.render.com/agri_63uq'
-)
+DB_HOST = os.getenv('DB_HOST')
+DB_PORT = os.getenv('DB_PORT', '5432')
+DB_NAME = os.getenv('DB_NAME')
+DB_USER = os.getenv('DB_USER')
+DB_PASSWORD = os.getenv('DB_PASSWORD')
+
+if all([DB_HOST, DB_NAME, DB_USER, DB_PASSWORD]):
+    DATABASE_URL = f"postgresql://{DB_USER}:{DB_PASSWORD}@{DB_HOST}:{DB_PORT}/{DB_NAME}"
+else:
+    DATABASE_URL = os.getenv(
+        'DATABASE_URL',
+        'postgresql://agri_63uq_user:hPZNCkCa80anWm9HXlm9M7yd371C1jvY@dpg-d8tn8mojs32c73bv2h40-a.singapore-postgres.render.com/agri_63uq'
+    )
 
 START_DATE = datetime(2015, 1, 1)
 END_DATE = datetime(2025, 12, 31)
@@ -37,6 +49,7 @@ class AgrimarkETL:
     def __init__(self):
         self.db = psycopg2.connect(DATABASE_URL)
         self.cursor = self.db.cursor()
+        self.setup_database()
         
         self.stats = {
             'districts_processed': 0,
@@ -44,6 +57,20 @@ class AgrimarkETL:
             'dates_processed': 0,
             'records_inserted': 0
         }
+
+    def setup_database(self):
+        logging.info("Ensuring database schema is set up...")
+        try:
+            schema_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'schema.sql')
+            with open(schema_path, 'r') as f:
+                schema_sql = f.read()
+            self.cursor.execute(schema_sql)
+            self.db.commit()
+            logging.info("Database schema setup complete.")
+        except Exception as e:
+            logging.error(f"Failed to setup database schema: {e}")
+            self.db.rollback()
+            raise e
 
     def close(self):
         self.cursor.close()
@@ -186,7 +213,7 @@ class AgrimarkETL:
                     return records
                 return []
 
-            with ThreadPoolExecutor(max_workers=2) as executor:
+            with ThreadPoolExecutor(max_workers=10) as executor:
                 futures = [executor.submit(worker, b) for b in all_branches]
                 for future in as_completed(futures):
                     res = future.result()
