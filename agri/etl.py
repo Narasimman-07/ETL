@@ -211,7 +211,7 @@ class AgrimarkETL:
                             float(item_data.get('qty', 0)) if item_data.get('qty') else None
                         ))
                     return records
-                return []
+                return []   
 
             with ThreadPoolExecutor(max_workers=10) as executor:
                 futures = [executor.submit(worker, b) for b in all_branches]

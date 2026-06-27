@@ -1,8 +1,11 @@
-requests
-beautifulsoup4
-urllib3
-psycopg2-binary
 fastapi
 uvicorn
-gunicorn
+psycopg2-binary
 python-dotenv
+requests
+pandas
+beautifulsoup4
+lxml
+python-multipart
+urllib3
+gunicorn

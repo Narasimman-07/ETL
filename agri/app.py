@@ -2,7 +2,8 @@ import requests
 import json
 import logging
 from datetime import datetime, timedelta
-import mysql.connector
+import psycopg2
+from psycopg2.extras import execute_values
 from bs4 import BeautifulSoup
 import urllib3
 import time
@@ -10,8 +11,11 @@ urllib3.disable_warnings()
 from concurrent.futures import ThreadPoolExecutor, as_completed
 import os
 from dotenv import load_dotenv
+from fastapi import FastAPI, BackgroundTasks
 
 load_dotenv()
+
+app = FastAPI()
 
 # Setup Logging
 logging.basicConfig(
@@ -23,20 +27,19 @@ console = logging.StreamHandler()
 console.setLevel(logging.INFO)
 logging.getLogger('').addHandler(console)
 
-DB_CONFIG = {
-    'host': os.getenv('DB_HOST'),
-    'user': os.getenv('DB_USER'),
-    'password': os.getenv('DB_PASSWORD'),
-    'database': os.getenv('DB_NAME'),
-    'port': os.getenv('DB_PORT', 3306)
-}
-
 START_DATE = datetime(2021, 6, 1)
 HEADERS = {'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/114.0.0.0 Safari/537.36'}
 
 class AgrimarkETL:
     def __init__(self):
-        self.db = mysql.connector.connect(**DB_CONFIG)
+        self.db = psycopg2.connect(
+            host=os.getenv("DB_HOST"),
+            database=os.getenv("DB_NAME"),
+            user=os.getenv("DB_USER"),
+            password=os.getenv("DB_PASSWORD"),
+            port=os.getenv("DB_PORT", "5432"),
+            sslmode="require"
+        )
         self.cursor = self.db.cursor()
         
         self.stats = {
@@ -77,10 +80,11 @@ class AgrimarkETL:
                 raise Exception("Failed to fetch districts. Server is down and no database fallback available.")
             
         insert_query = """
-            INSERT IGNORE INTO districts (district_code, district_name)
-            VALUES (%s, %s)
+            INSERT INTO districts (district_code, district_name)
+            VALUES %s
+            ON CONFLICT (district_code) DO NOTHING
         """
-        self.cursor.executemany(insert_query, [(d['code'], d['name']) for d in districts])
+        execute_values(self.cursor, insert_query, [(d['code'], d['name']) for d in districts])
         self.db.commit()
         self.stats['districts_processed'] = len(districts)
         logging.info(f"Loaded {len(districts)} districts.")
@@ -133,10 +137,11 @@ class AgrimarkETL:
             raise Exception("Failed to fetch any branches.")
             
         branch_query = """
-            INSERT IGNORE INTO branches (branch_id, branch_name, district_code)
-            VALUES (%s, %s, %s)
+            INSERT INTO branches (branch_id, branch_name, district_code)
+            VALUES %s
+            ON CONFLICT (branch_id) DO NOTHING
         """
-        self.cursor.executemany(branch_query, [(b['id'], b['name'], b['district_code']) for b in all_branches])
+        execute_values(self.cursor, branch_query, [(b['id'], b['name'], b['district_code']) for b in all_branches])
         self.db.commit()
         self.stats['branches_processed'] = len(all_branches)
         logging.info(f"Loaded {len(all_branches)} branches.")
@@ -146,7 +151,7 @@ class AgrimarkETL:
         all_dates = [(START_DATE + timedelta(days=i)).strftime('%d-%m-%Y') for i in range(delta.days + 1)]
         
         logging.info("Checking database for already completed dates...")
-        self.cursor.execute("SELECT DISTINCT DATE_FORMAT(price_date, '%d-%m-%Y') FROM market_prices")
+        self.cursor.execute("SELECT DISTINCT TO_CHAR(price_date, 'DD-MM-YYYY') FROM market_prices")
         completed_dates = set([row[0] for row in self.cursor.fetchall()])
         dates = [d for d in all_dates if d not in completed_dates]
         
@@ -160,9 +165,10 @@ class AgrimarkETL:
         logging.info(f"Starting historical extraction for {len(dates)} missing dates (Skipped {len(completed_dates)})...")
         
         insert_query = """
-            INSERT IGNORE INTO market_prices 
+            INSERT INTO market_prices 
             (district_code, branch_id, price_date, item_name, min_price, max_price, qty)
-            VALUES (%s, %s, %s, %s, %s, %s, %s)
+            VALUES %s
+            ON CONFLICT (branch_id, price_date, item_name) DO NOTHING
         """
         
         for date_str in reversed(dates):
@@ -196,9 +202,9 @@ class AgrimarkETL:
                         daily_records.extend(res)
             
             if daily_records:
-                self.cursor.executemany(insert_query, daily_records)
+                execute_values(self.cursor, insert_query, daily_records)
                 self.db.commit()
-                new_records = self.cursor.rowcount
+                new_records = len(daily_records)
                 self.stats['records_inserted'] += new_records
                 logging.info(f"  -> Fetched {len(daily_records)}, Successfully inserted {new_records} NEW records for {date_str}")
             else:
@@ -215,7 +221,7 @@ class AgrimarkETL:
         logging.info(f"Total Dates Processed: {self.stats['dates_processed']}")
         logging.info(f"Total Commodity Records Inserted: {self.stats['records_inserted']}")
 
-if __name__ == "__main__":
+def run_etl_job():
     etl = AgrimarkETL()
     try:
         etl.process()
@@ -223,3 +229,12 @@ if __name__ == "__main__":
         logging.error(f"Fatal error during execution: {e}")
     finally:
         etl.close()
+
+@app.post("/run-etl")
+def trigger_etl(background_tasks: BackgroundTasks):
+    background_tasks.add_task(run_etl_job)
+    return {"message": "ETL job has been started in the background."}
+
+if __name__ == "__main__":
+    import uvicorn
+    uvicorn.run("app:app", host="0.0.0.0", port=8000)
