@@ -12,6 +12,9 @@ from concurrent.futures import ThreadPoolExecutor, as_completed
 import os
 from dotenv import load_dotenv
 from fastapi import FastAPI, BackgroundTasks
+from fastapi.responses import StreamingResponse
+import io
+import csv
 
 load_dotenv()
 
@@ -234,6 +237,86 @@ def run_etl_job():
 def trigger_etl(background_tasks: BackgroundTasks):
     background_tasks.add_task(run_etl_job)
     return {"message": "ETL job has been started in the background."}
+
+def get_db_connection():
+    return psycopg2.connect(
+        host=os.getenv("DB_HOST"),
+        database=os.getenv("DB_NAME"),
+        user=os.getenv("DB_USER"),
+        password=os.getenv("DB_PASSWORD"),
+        port=os.getenv("DB_PORT", "5432"),
+        sslmode="require"
+    )
+
+@app.get("/stats")
+def get_stats():
+    conn = get_db_connection()
+    cursor = conn.cursor()
+    try:
+        cursor.execute("SELECT COUNT(*), MIN(price_date), MAX(price_date) FROM market_prices")
+        result = cursor.fetchone()
+        return {
+            "total_records": result[0] if result else 0,
+            "min_date": result[1],
+            "max_date": result[2]
+        }
+    except Exception as e:
+        return {"error": str(e)}
+    finally:
+        cursor.close()
+        conn.close()
+
+@app.get("/download-csv")
+def download_csv():
+    def iter_csv():
+        conn = get_db_connection()
+        # Using a named cursor for server-side execution to handle large amounts of data efficiently
+        cursor = conn.cursor(name='fetch_large_result') 
+        try:
+            query = """
+                SELECT 
+                    m.price_date, 
+                    d.district_name, 
+                    b.branch_name, 
+                    m.item_name, 
+                    m.min_price, 
+                    m.max_price, 
+                    m.qty
+                FROM market_prices m
+                LEFT JOIN districts d ON m.district_code = d.district_code
+                LEFT JOIN branches b ON m.branch_id = b.branch_id
+                ORDER BY m.price_date DESC
+            """
+            cursor.execute(query)
+            
+            output = io.StringIO()
+            writer = csv.writer(output)
+            writer.writerow(['Price Date', 'District Name', 'Market/Branch Name', 'Item Name', 'Min Price', 'Max Price', 'Quantity'])
+            yield output.getvalue()
+            output.seek(0)
+            output.truncate(0)
+            
+            while True:
+                rows = cursor.fetchmany(2000)
+                if not rows:
+                    break
+                for row in rows:
+                    writer.writerow(row)
+                yield output.getvalue()
+                output.seek(0)
+                output.truncate(0)
+        except Exception as e:
+            logging.error(f"Error generating CSV: {e}")
+            yield f"Error generating CSV: {e}"
+        finally:
+            cursor.close()
+            conn.close()
+
+    return StreamingResponse(
+        iter_csv(), 
+        media_type="text/csv", 
+        headers={"Content-Disposition": "attachment; filename=market_prices.csv"}
+    )
 
 if __name__ == "__main__":
     import uvicorn
